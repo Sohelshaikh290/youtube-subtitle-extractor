@@ -45,6 +45,7 @@ def get_video_info(url, cookies_path=None):
 def download_subtitle(url, sub_code, is_auto, cookies_path=None):
     with tempfile.TemporaryDirectory() as tmpdirname:
         # Define base options
+        # We use a generic template first, then rename to remove language suffixes
         ydl_opts = {
             'skip_download': True,
             'outtmpl': os.path.join(tmpdirname, '%(title)s.%(ext)s'),
@@ -52,6 +53,7 @@ def download_subtitle(url, sub_code, is_auto, cookies_path=None):
             'writesubtitles': not is_auto,
             'writeautomaticsub': is_auto,
             'quiet': True,
+            'noplaylist': True,
         }
         
         if cookies_path:
@@ -59,14 +61,27 @@ def download_subtitle(url, sub_code, is_auto, cookies_path=None):
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                # Extract info again to get the clean title for the final filename
+                info = ydl.extract_info(url, download=False)
+                video_title = info.get('title', 'subtitles')
                 ydl.download([url])
             
-            # Find the downloaded subtitle file
+            # Find the downloaded subtitle file (it usually has a .en.vtt or similar suffix)
             files = os.listdir(tmpdirname)
             if files:
-                sub_file_path = os.path.join(tmpdirname, files[0])
-                with open(sub_file_path, "rb") as f:
-                    return f.read(), files[0]
+                original_file_path = os.path.join(tmpdirname, files[0])
+                file_extension = os.path.splitext(files[0])[1] # e.g., .vtt or .srt
+                
+                # Create the clean filename: Video Title.extension
+                clean_filename = f"{video_title}{file_extension}"
+                # Remove characters that might be illegal in filenames just in case
+                clean_filename = "".join([c for c in clean_filename if c.isalnum() or c in (' ', '.', '-', '_')]).strip()
+                
+                final_file_path = os.path.join(tmpdirname, clean_filename)
+                os.rename(original_file_path, final_file_path)
+                
+                with open(final_file_path, "rb") as f:
+                    return f.read(), clean_filename
             return None, None
         except Exception as e:
             st.error(f"Download Error: {str(e)}")
@@ -138,7 +153,7 @@ if video_url:
                             label="Click to Download File",
                             data=file_data,
                             file_name=file_name,
-                            mime="text/vtt"
+                            mime="text/plain" # Generic text mime to handle various sub formats
                         )
                     else:
                         st.error("Failed to generate download. Try a different format.")
