@@ -2,165 +2,167 @@ import streamlit as st
 import yt_dlp
 import os
 import tempfile
-import time
+import re
+from typing import Tuple, Optional
 
-# Page Configuration
+# --- Page Configuration ---
 st.set_page_config(
-    page_title="YouTube Subtitle Extractor",
-    page_icon="🎬",
-    layout="centered"
+    page_title="YouTube Subtitle Pro",
+    page_icon="📜",
+    layout="wide"
 )
 
-# App Title and Description
-st.title("🎬 YouTube Subtitle Extractor")
+# --- Custom Styles ---
 st.markdown("""
-Extract manual or auto-generated subtitles from any YouTube video. 
-Paste your link below to get started.
-""")
+    <style>
+    .main { max-width: 1000px; margin: 0 auto; }
+    .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #FF0000; color: white; }
+    .stButton>button:hover { background-color: #CC0000; color: white; border: none; }
+    </style>
+    """, unsafe_allow_all_headers=True)
 
-# Sidebar for Cookies (Advanced)
-with st.sidebar:
-    st.header("Settings")
-    use_cookies = st.checkbox("Use Cookies (.txt)", help="Required for age-restricted or private videos.")
-    cookie_file = None
-    if use_cookies:
-        cookie_file = st.file_uploader("Upload cookies.txt", type=["txt"])
+def strip_vtt_timestamps(vtt_text: str) -> str:
+    """Simple regex to remove VTT/SRT timestamps and metadata for a clean transcript."""
+    # Remove header
+    text = re.sub(r'WEBVTT/n.*?\n\n', '', vtt_text, flags=re.DOTALL)
+    # Remove timestamps (00:00:00.000 --> 00:00:00.000)
+    text = re.sub(r'\d{1,2}:\d{2}:\d{2}\.\d{3} --> \d{1,2}:\d{2}:\d{2}\.\d{3}.*?\n', '', text)
+    # Remove SRT style timestamps (00:00:00,000)
+    text = re.sub(r'\d{1,2}:\d{2}:\d{2},\d{3} --> \d{1,2}:\d{2}:\d{2},\d{3}.*?\n', '', text)
+    # Remove tags like <c> or <i>
+    text = re.sub(r'<[^>]*>', '', text)
+    # Remove line numbers
+    text = re.sub(r'^\d+\s*$', '', text, flags=re.MULTILINE)
+    # Collapse multiple newlines
+    text = re.sub(r'\n+', '\n', text)
+    return text.strip()
 
-def get_video_info(url, cookies_path=None):
+def get_info(url: str, cookies_path: Optional[str] = None):
     ydl_opts = {
         'skip_download': True,
         'quiet': True,
-        'no_warnings': True,
+        'cookiefile': cookies_path if cookies_path else None
     }
-    if cookies_path:
-        ydl_opts['cookiefile'] = cookies_path
-    
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             return ydl.extract_info(url, download=False)
     except Exception as e:
-        st.error(f"Error fetching video info: {str(e)}")
+        st.error(f"Extraction Error: {str(e)}")
         return None
 
-def download_subtitle(url, sub_code, is_auto, cookies_path=None):
-    with tempfile.TemporaryDirectory() as tmpdirname:
-        # Define base options
-        # We use a generic template first, then rename to remove language suffixes
+def process_subtitles(url: str, sub_code: str, is_auto: bool, cookies_path: str, clean_text: bool) -> Tuple[Optional[bytes], str]:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # We use a generic template to find the file easily, then rename it later
         ydl_opts = {
             'skip_download': True,
-            'outtmpl': os.path.join(tmpdirname, '%(title)s.%(ext)s'),
-            'subtitleslangs': [sub_code],
             'writesubtitles': not is_auto,
             'writeautomaticsub': is_auto,
-            'quiet': True,
-            'noplaylist': True,
+            'subtitleslangs': [sub_code],
+            'outtmpl': os.path.join(tmpdir, 'downloaded_sub'),
+            'cookiefile': cookies_path if cookies_path else None,
+            'postprocessors': [{'key': 'FFmpegSubtitlesConvertor', 'format': 'srt'}] if not clean_text else [],
         }
-        
-        if cookies_path:
-            ydl_opts['cookiefile'] = cookies_path
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # Extract info again to get the clean title for the final filename
-                info = ydl.extract_info(url, download=False)
+                info = ydl.extract_info(url, download=True)
+                # EXACT video title including emojis and symbols
                 video_title = info.get('title', 'subtitles')
-                ydl.download([url])
-            
-            # Find the downloaded subtitle file (it usually has a .en.vtt or similar suffix)
-            files = os.listdir(tmpdirname)
-            if files:
-                original_file_path = os.path.join(tmpdirname, files[0])
-                file_extension = os.path.splitext(files[0])[1] # e.g., .vtt or .srt
                 
-                # Create the clean filename: Video Title.extension
-                clean_filename = f"{video_title}{file_extension}"
-                # Remove characters that might be illegal in filenames just in case
-                clean_filename = "".join([c for c in clean_filename if c.isalnum() or c in (' ', '.', '-', '_')]).strip()
+                files = os.listdir(tmpdir)
+                if not files:
+                    return None, ""
                 
-                final_file_path = os.path.join(tmpdirname, clean_filename)
-                os.rename(original_file_path, final_file_path)
+                source_file = os.path.join(tmpdir, files[0])
+                ext = os.path.splitext(files[0])[1]
                 
-                with open(final_file_path, "rb") as f:
-                    return f.read(), clean_filename
-            return None, None
+                with open(source_file, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                if clean_text:
+                    content = strip_vtt_timestamps(content)
+                    final_name = f"{video_title}.txt"
+                    return content.encode('utf-8'), final_name
+                else:
+                    final_name = f"{video_title}{ext}"
+                    return content.encode('utf-8'), final_name
+                    
         except Exception as e:
-            st.error(f"Download Error: {str(e)}")
-            return None, None
+            st.error(f"Processing failed: {e}")
+            return None, ""
 
-# Main UI Logic
-video_url = st.text_input("YouTube Video URL", placeholder="https://www.youtube.com/watch?v=...")
+# --- UI Layout ---
+st.title("📜 YouTube Subtitle Pro")
+st.caption("Extract exact transcripts or subtitle files including emojis and symbols in the filename.")
 
-if video_url:
-    # Handle Cookies
-    cookies_path = None
-    if use_cookies and cookie_file:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as tmp_cookie:
-            tmp_cookie.write(cookie_file.getvalue())
-            cookies_path = tmp_cookie.name
+col1, col2 = st.columns([2, 1])
 
-    with st.spinner("Analyzing video..."):
-        info = get_video_info(video_url, cookies_path)
+with col2:
+    st.subheader("Settings")
+    use_cookies = st.toggle("Enable Cookies", help="Required for private/age-gated videos")
+    cookie_file = None
+    if use_cookies:
+        cookie_file = st.file_uploader("Upload cookies.txt", type=['txt'])
+    
+    clean_mode = st.toggle("Clean Transcript Mode", value=True, help="Removes timestamps for easy reading.")
 
-    if info:
-        st.subheader(info.get('title', 'Video Found'))
-        if 'thumbnail' in info:
-            st.image(info['thumbnail'], width=300)
+with col1:
+    url = st.text_input("YouTube URL", placeholder="https://www.youtube.com/watch?v=...")
+    
+    if url:
+        cookies_path = None
+        if use_cookies and cookie_file:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as tmp:
+                tmp.write(cookie_file.getvalue())
+                cookies_path = tmp.name
 
-        # Process Subtitles
-        manual_subs = info.get('subtitles', {})
-        auto_subs = info.get('automatic_captions', {})
+        with st.status("Analyzing video metadata...") as status:
+            info = get_info(url, cookies_path)
+            if info:
+                status.update(label="Analysis Complete!", state="complete")
         
-        available_options = []
-        
-        for lang_code, details in manual_subs.items():
-            name = details[0].get('name', lang_code)
-            available_options.append({
-                "label": f"{name} (Manual)",
-                "code": lang_code,
-                "is_auto": False
-            })
+        if info:
+            st.info(f"**Video:** {info.get('title')}")
             
-        for lang_code, details in auto_subs.items():
-            name = details[0].get('name', lang_code)
-            available_options.append({
-                "label": f"{name} (Auto-generated)",
-                "code": lang_code,
-                "is_auto": True
-            })
-
-        if not available_options:
-            st.warning("No subtitles found for this video.")
-        else:
-            # Selection UI
-            selection_labels = [opt['label'] for opt in available_options]
-            choice_label = st.selectbox("Select Subtitle Track", selection_labels)
+            manual = info.get('subtitles', {})
+            auto = info.get('automatic_captions', {})
             
-            # Find selected option data
-            selected_opt = next(opt for opt in available_options if opt['label'] == choice_label)
+            options = []
+            for k, v in manual.items():
+                options.append({"label": f"✅ {v[0].get('name', k)} (Manual)", "code": k, "auto": False})
+            for k, v in auto.items():
+                options.append({"label": f"🤖 {v[0].get('name', k)} (Auto)", "code": k, "auto": True})
             
-            if st.button("Prepare Download"):
-                with st.spinner("Processing file..."):
-                    file_data, file_name = download_subtitle(
-                        video_url, 
-                        selected_opt['code'], 
-                        selected_opt['is_auto'], 
-                        cookies_path
+            if not options:
+                st.warning("No subtitles detected for this video.")
+            else:
+                selection = st.selectbox(
+                    "Choose Language & Type", 
+                    options, 
+                    format_func=lambda x: x['label']
+                )
+                
+                if st.button("Generate Download"):
+                    data, name = process_subtitles(
+                        url, 
+                        selection['code'], 
+                        selection['auto'], 
+                        cookies_path, 
+                        clean_mode
                     )
                     
-                    if file_data:
-                        st.success(f"Ready: {file_name}")
+                    if data:
+                        st.balloons()
                         st.download_button(
-                            label="Click to Download File",
-                            data=file_data,
-                            file_name=file_name,
-                            mime="text/plain" # Generic text mime to handle various sub formats
+                            label=f"💾 Download {name}",
+                            data=data,
+                            file_name=name,
+                            mime="text/plain" if clean_mode else "text/vtt"
                         )
-                    else:
-                        st.error("Failed to generate download. Try a different format.")
 
-    # Cleanup temp cookie file if created
-    if cookies_path and os.path.exists(cookies_path):
-        os.remove(cookies_path)
+        # Cleanup
+        if cookies_path and os.path.exists(cookies_path):
+            os.remove(cookies_path)
 
 st.divider()
-st.caption("Built with Streamlit and yt-dlp")
+st.markdown("Developed with ❤️ using Streamlit & yt-dlp")
