@@ -19,7 +19,7 @@ st.markdown("""
     .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #FF0000; color: white; }
     .stButton>button:hover { background-color: #CC0000; color: white; border: none; }
     </style>
-    """, unsafe_allow_all_headers=True)
+    """, unsafe_allow_html=True)
 
 def strip_vtt_timestamps(vtt_text: str) -> str:
     """Simple regex to remove VTT/SRT timestamps and metadata for a clean transcript."""
