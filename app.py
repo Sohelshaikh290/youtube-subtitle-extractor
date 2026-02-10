@@ -4,6 +4,7 @@ import os
 import tempfile
 import re
 from typing import Tuple, Optional
+from datetime import timedelta
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -18,6 +19,7 @@ st.markdown("""
     .main { max-width: 1000px; margin: 0 auto; }
     .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #FF0000; color: white; }
     .stButton>button:hover { background-color: #CC0000; color: white; border: none; }
+    .video-info-container { display: flex; gap: 20px; margin-bottom: 20px; align-items: flex-start; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -122,7 +124,24 @@ with col1:
                 status.update(label="Analysis Complete!", state="complete")
         
         if info:
-            st.info(f"**Video:** {info.get('title')}")
+            # Video Details Section
+            title = info.get('title', 'Unknown Title')
+            thumbnail = info.get('thumbnail')
+            duration_seconds = info.get('duration')
+            duration_str = str(timedelta(seconds=duration_seconds)) if duration_seconds else "Unknown"
+
+            st.write(f"### {title}")
+            
+            v_col1, v_col2 = st.columns([1, 2])
+            with v_col1:
+                if thumbnail:
+                    st.image(thumbnail, use_container_width=True)
+            with v_col2:
+                st.write(f"**Duration:** {duration_str}")
+                st.write(f"**Channel:** {info.get('uploader', 'Unknown')}")
+                st.write(f"**Views:** {info.get('view_count', 0):,}")
+
+            st.divider()
             
             manual = info.get('subtitles', {})
             auto = info.get('automatic_captions', {})
